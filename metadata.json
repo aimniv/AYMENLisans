@@ -1,0 +1,8 @@
+{
+  "name": "AYMENLisans",
+  "description": "Windows, Office, yapay zeka ve tasarım yazılımları için güvenli, hızlı ve uygun fiyatlı dijital lisans mağazası.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
