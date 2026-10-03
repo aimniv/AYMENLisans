@@ -22,6 +22,7 @@ import {
   Search,
 } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
+import { useAuth } from '../context/AuthContext';
 import { Product, CATEGORIES, formatPriceTL, CategorySlug } from '../../lib/products';
 import { OrderResult } from '../../lib/checkout';
 import { Link } from '../context/RouterContext';
@@ -33,8 +34,6 @@ export const AdminPage: React.FC = () => {
     orders,
     settings,
     isAdminLoggedIn,
-    loginAdmin,
-    logoutAdmin,
     addProduct,
     updateProduct,
     deleteProduct,
@@ -44,12 +43,15 @@ export const AdminPage: React.FC = () => {
     deleteCoupon,
     updateSettings,
   } = useStore();
+  const { user, isAuthLoading, login, logout } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'dashboard' | 'products' | 'orders' | 'coupons' | 'settings'>('dashboard');
 
   // Auth State
+  const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   // Search & Filter
   const [productSearch, setProductSearch] = useState('');
@@ -98,14 +100,16 @@ export const AdminPage: React.FC = () => {
     setSettingsForm(settings);
   }, [settings]);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
-    if (passwordInput === 'admin' || passwordInput === 'admin123' || passwordInput === 'aymen') {
-      loginAdmin('admin_authenticated_' + Date.now());
+    setIsLoggingIn(true);
+    const res = await login(emailInput.trim(), passwordInput);
+    setIsLoggingIn(false);
+    if (res.ok) {
       setPasswordInput('');
     } else {
-      setAuthError('Hatalı şifre. Varsayılan şifre: "admin"');
+      setAuthError(res.error);
     }
   };
 
@@ -192,7 +196,11 @@ export const AdminPage: React.FC = () => {
     o.musteri.eposta.toLowerCase().includes(orderSearch.toLowerCase())
   );
 
-  // If not logged in, show Login Screen
+  if (isAuthLoading) {
+    return <div className="min-h-[80vh] bg-[#f1f2f3]" aria-busy="true" />;
+  }
+
+  // Giriş yapılmamışsa veya yönetici değilse giriş ekranı gösterilir
   if (!isAdminLoggedIn) {
     return (
       <div className="min-h-[80vh] flex items-center justify-center py-12 px-4 bg-[#f1f2f3]">
@@ -209,6 +217,17 @@ export const AdminPage: React.FC = () => {
             </p>
           </div>
 
+          {user && (
+            <div className="mb-4 bg-[#fffbeb] border border-[#fde68a] text-[#92400e] text-[10px] font-semibold px-3 py-2 rounded-[8px]">
+              <span>
+                {user.eposta} hesabının yönetici yetkisi yok. Yönetici hesabıyla giriş yapmak için önce çıkış yapın.
+              </span>{' '}
+              <button type="button" onClick={logout} className="underline cursor-pointer">
+                Çıkış Yap
+              </button>
+            </div>
+          )}
+
           {authError && (
             <div className="mb-4 bg-[#fef2f2] border border-[#fecaca] text-[#dc2626] text-[10px] font-semibold px-3 py-2 rounded-[8px] flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -218,24 +237,40 @@ export const AdminPage: React.FC = () => {
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="block text-[10px] font-bold text-[#374151] mb-1">
-                Yönetici Şifresi
+              <label htmlFor="admin-email" className="block text-[10px] font-bold text-[#374151] mb-1">
+                Yönetici E-Postası
               </label>
               <input
-                type="password"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                placeholder="Şifrenizi giriniz (varsayılan: admin)"
+                id="admin-email"
+                type="email"
+                autoComplete="username"
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
                 className="w-full h-[38px] px-3 bg-[#f6f6f7] border border-[#ececec] rounded-[8px] text-[11px] text-[#111111] focus:outline-none focus:border-[#55a80b] focus:bg-white"
                 autoFocus
               />
             </div>
 
+            <div>
+              <label htmlFor="admin-password" className="block text-[10px] font-bold text-[#374151] mb-1">
+                Şifre
+              </label>
+              <input
+                id="admin-password"
+                type="password"
+                autoComplete="current-password"
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                className="w-full h-[38px] px-3 bg-[#f6f6f7] border border-[#ececec] rounded-[8px] text-[11px] text-[#111111] focus:outline-none focus:border-[#55a80b] focus:bg-white"
+              />
+            </div>
+
             <button
               type="submit"
-              className="w-full bg-[#55a80b] hover:bg-[#468f07] text-white text-[12px] font-semibold py-[10px] rounded-[8px] transition-colors cursor-pointer"
+              disabled={isLoggingIn}
+              className="w-full bg-[#55a80b] hover:bg-[#468f07] disabled:opacity-60 text-white text-[12px] font-semibold py-[10px] rounded-[8px] transition-colors cursor-pointer"
             >
-              Yönetim Paneline Giriş Yap
+              {isLoggingIn ? 'Giriş yapılıyor...' : 'Yönetim Paneline Giriş Yap'}
             </button>
           </form>
 
@@ -329,7 +364,7 @@ export const AdminPage: React.FC = () => {
 
             <button
               type="button"
-              onClick={logoutAdmin}
+              onClick={logout}
               aria-label="Çıkış Yap"
               className="text-[#a3a3a3] hover:text-white p-1.5 transition-colors cursor-pointer"
               title="Güvenli Çıkış"

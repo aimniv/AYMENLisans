@@ -1,5 +1,6 @@
 import React from 'react';
 import { RouterProvider, useRouter } from './context/RouterContext';
+import { AuthProvider } from './context/AuthContext';
 import { StoreProvider } from './context/StoreContext';
 import { CartProvider } from './context/CartContext';
 import { Header } from './components/Header';
@@ -14,6 +15,7 @@ import { ContactPage } from './pages/ContactPage';
 import { AccountPage } from './pages/AccountPage';
 import { CorporatePage } from './pages/CorporatePage';
 import { AdminPage } from './pages/AdminPage';
+import { LoginPage } from './pages/LoginPage';
 
 const AppRoutes: React.FC = () => {
   const { pathname } = useRouter();
@@ -74,6 +76,13 @@ const AppRoutes: React.FC = () => {
     return <ContactPage />;
   }
 
+  if (cleanPath === '/giris') {
+    return <LoginPage key="giris" initialMode="giris" />;
+  }
+  if (cleanPath === '/kayit') {
+    return <LoginPage key="kayit" initialMode="kayit" />;
+  }
+
   if (cleanPath === '/hesabim') {
     return <AccountPage />;
   }
@@ -126,11 +135,13 @@ const MainShell: React.FC = () => {
 export function App() {
   return (
     <RouterProvider>
-      <StoreProvider>
-        <CartProvider>
-          <MainShell />
-        </CartProvider>
-      </StoreProvider>
+      <AuthProvider>
+        <StoreProvider>
+          <CartProvider>
+            <MainShell />
+          </CartProvider>
+        </StoreProvider>
+      </AuthProvider>
     </RouterProvider>
   );
 }

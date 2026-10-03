@@ -12,6 +12,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { useCart } from '../context/CartContext';
+import { useAuth } from '../context/AuthContext';
 import { ProductVisual } from '../components/ProductVisual';
 import { formatPriceTL } from '../../lib/products';
 import { Link, useRouter } from '../context/RouterContext';
@@ -27,6 +28,7 @@ export const CheckoutPage: React.FC = () => {
     recordOrder,
   } = useCart();
   const { navigate } = useRouter();
+  const { user, isAuthLoading } = useAuth();
 
   const [adSoyad, setAdSoyad] = useState('');
   const [telefon, setTelefon] = useState('');
@@ -44,6 +46,14 @@ export const CheckoutPage: React.FC = () => {
   useEffect(() => {
     document.title = 'Ödeme - Ucuz Lisans Satın Al | AYMENLisans';
   }, []);
+
+  // Üyenin kayıtlı bilgileriyle formu önceden doldur
+  useEffect(() => {
+    if (!user) return;
+    setAdSoyad((prev) => prev || user.ad);
+    setEposta((prev) => prev || user.eposta);
+    setTelefon((prev) => prev || user.telefon);
+  }, [user]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -103,6 +113,11 @@ export const CheckoutPage: React.FC = () => {
 
       const data = await response.json();
 
+      if (response.status === 401) {
+        navigate('/giris?yonlendir=/checkout');
+        return;
+      }
+
       if (!response.ok || !data.ok) {
         setErrorMsg(data.error || 'Sipariş işlemi sırasında bir hata oluştu.');
         setIsSubmitting(false);
@@ -125,6 +140,33 @@ export const CheckoutPage: React.FC = () => {
       setIsSubmitting(false);
     }
   };
+
+  if (isAuthLoading) {
+    return <div className="bg-[#f1f2f3] min-h-[65vh]" aria-busy="true" />;
+  }
+
+  if (!user) {
+    return (
+      <div className="bg-[#f1f2f3] min-h-[65vh] py-10">
+        <div className="max-w-[1100px] mx-auto px-4">
+          <div className="bg-white border border-[#ececec] rounded-[10px] p-8 text-center max-w-[440px] mx-auto">
+            <h1 className="text-[15px] font-bold text-[#111111] mb-1.5">
+              Ödemeye devam etmek için giriş yapın
+            </h1>
+            <p className="text-[11px] text-[#737373] mb-4">
+              Lisans anahtarlarınız hesabınıza teslim edilir. Sepetiniz giriş yaptıktan sonra korunur.
+            </p>
+            <Link
+              href="/giris?yonlendir=/checkout"
+              className="inline-flex items-center justify-center bg-[#55a80b] hover:bg-[#468f07] text-white text-[12px] font-semibold px-[14px] py-[10px] rounded-[8px]"
+            >
+              Giriş Yap / Üye Ol
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (items.length === 0) {
     return (

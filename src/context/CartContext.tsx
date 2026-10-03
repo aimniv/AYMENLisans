@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { Product, formatPriceSymbol } from '../../lib/products';
 import { OrderResult } from '../../lib/checkout';
 import { useStore } from './StoreContext';
+import { useAuth } from './AuthContext';
 
 export const CART_STORAGE_KEY = 'cart:v1';
 const LAST_ORDER_STORAGE_KEY = 'lastOrder:v1';
@@ -31,7 +32,7 @@ interface CartContextValue {
   updateQuantity: (slug: string, adet: number) => void;
   removeItem: (slug: string) => void;
   clearCart: () => void;
-  applyCoupon: (code: string) => { ok: boolean; message: string };
+  applyCoupon: (code: string) => Promise<{ ok: boolean; message: string }>;
   removeCoupon: () => void;
   lastOrder: OrderResult | null;
   recordOrder: (order: OrderResult) => void;
@@ -76,9 +77,12 @@ function parseStoredCart(raw: string | null): {
 }
 
 export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { products, coupons, orders, refreshData } = useStore();
+  const { products } = useStore();
+  const { myOrders, refreshMyOrders } = useAuth();
   const [storedItems, setStoredItems] = useState<StoredCartItem[]>([]);
   const [couponCode, setCouponCode] = useState<string | null>(null);
+  // İndirim oranı sunucuda doğrulanır; kupon listesi istemciye verilmez.
+  const [discountRate, setDiscountRate] = useState(0);
   const [lastOrder, setLastOrder] = useState<OrderResult | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
 
@@ -87,7 +91,22 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       window.localStorage.getItem(CART_STORAGE_KEY)
     );
     setStoredItems(items);
-    setCouponCode(savedCoupon);
+
+    if (savedCoupon) {
+      fetch('/api/coupons/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: savedCoupon }),
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data?.ok) {
+            setCouponCode(data.code);
+            setDiscountRate(data.rate);
+          }
+        })
+        .catch(() => {});
+    }
 
     try {
       const rawLastOrder = window.localStorage.getItem(LAST_ORDER_STORAGE_KEY);
@@ -144,11 +163,6 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [items]
   );
 
-  const discountRate = useMemo(() => {
-    if (!couponCode) return 0;
-    return coupons[couponCode] ?? 0;
-  }, [couponCode, coupons]);
-
   const discountAmount = useMemo(() => {
     if (discountRate <= 0 || subtotal <= 0) return 0;
     return Number(((subtotal * discountRate) / 100).toFixed(2));
@@ -202,29 +216,35 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const clearCart = useCallback(() => {
     setStoredItems([]);
     setCouponCode(null);
+    setDiscountRate(0);
   }, []);
 
-  const applyCoupon = useCallback(
-    (code: string) => {
-      const normalized = code.trim().toUpperCase();
-      if (!normalized) {
-        return { ok: false, message: 'Lütfen bir kupon kodu giriniz.' };
+  const applyCoupon = useCallback(async (code: string) => {
+    const normalized = code.trim().toUpperCase();
+    if (!normalized) {
+      return { ok: false, message: 'Lütfen bir kupon kodu giriniz.' };
+    }
+    try {
+      const res = await fetch('/api/coupons/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: normalized }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        return { ok: false, message: data.error || 'Geçersiz kupon kodu.' };
       }
-      const rate = coupons[normalized];
-      if (!rate) {
-        return {
-          ok: false,
-          message: 'Geçersiz kupon kodu. Demo için "HOSGELDIN" kodunu kullanabilirsiniz.',
-        };
-      }
-      setCouponCode(normalized);
-      return { ok: true, message: `%${rate} kupon indirimi uygulandı.` };
-    },
-    [coupons]
-  );
+      setCouponCode(data.code);
+      setDiscountRate(data.rate);
+      return { ok: true, message: `%${data.rate} kupon indirimi uygulandı.` };
+    } catch {
+      return { ok: false, message: 'Sunucuya bağlanılamadı.' };
+    }
+  }, []);
 
   const removeCoupon = useCallback(() => {
     setCouponCode(null);
+    setDiscountRate(0);
   }, []);
 
   const recordOrder = useCallback(
@@ -235,9 +255,9 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch {
         // ignore
       }
-      refreshData();
+      refreshMyOrders();
     },
-    [refreshData]
+    [refreshMyOrders]
   );
 
   return (
@@ -259,7 +279,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         removeCoupon,
         lastOrder,
         recordOrder,
-        savedOrders: orders,
+        savedOrders: myOrders,
       }}
     >
       {children}

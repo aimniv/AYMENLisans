@@ -32,6 +32,13 @@ export interface OrderLineItem {
   satirToplami: number;
 }
 
+export const ORDER_STATUSES = [
+  'Teslim Edildi',
+  'Teslimat Hazırlanıyor',
+  'Ödeme Bildirimi Bekleniyor',
+  'İptal Edildi',
+] as const;
+
 export interface OrderResult {
   siparisNo: string;
   tarih: string;
@@ -50,7 +57,7 @@ export interface OrderResult {
   indirimOrani: number;
   indirimTutari: number;
   toplamTutar: number;
-  durum: 'Teslim Edildi' | 'Teslimat Hazırlanıyor' | 'Ödeme Bildirimi Bekleniyor' | 'İptal Edildi';
+  durum: (typeof ORDER_STATUSES)[number];
   teslimEdilenBilgiler?: string;
 }
 
@@ -66,7 +73,8 @@ export function processCheckoutRequest(
   body: CheckoutRequestBody,
   envCheckoutUrl?: string,
   catalog?: Product[],
-  coupons?: Record<string, number>
+  coupons?: Record<string, number>,
+  generateOrderNo?: () => string
 ): CheckoutValidationResult {
   if (!body || typeof body !== 'object') {
     return {
@@ -210,8 +218,8 @@ export function processCheckoutRequest(
     indirimOrani > 0 ? Number(((araToplam * indirimOrani) / 100).toFixed(2)) : 0;
   const toplamTutar = Number(Math.max(0, araToplam - indirimTutari).toFixed(2));
 
-  const randomDigits = Math.floor(1000 + Math.random() * 9000);
-  const siparisNo = `SP-${randomDigits}`;
+  const siparisNo =
+    generateOrderNo?.() ?? `SP-${Math.floor(1000 + Math.random() * 9000)}`;
 
   const faturaTipi = body.faturaTipi === 'kurumsal' ? 'kurumsal' : 'bireysel';
 

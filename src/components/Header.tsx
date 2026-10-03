@@ -4,6 +4,7 @@ import { BrandLogo } from './BrandLogo';
 import { Link, useRouter } from '../context/RouterContext';
 import { useCart } from '../context/CartContext';
 import { useStore } from '../context/StoreContext';
+import { useAuth } from '../context/AuthContext';
 
 interface NavItem {
   label: string;
@@ -24,6 +25,7 @@ export const Header: React.FC = () => {
   const { pathname, searchParams, navigate } = useRouter();
   const { totalItemsCount, isHydrated } = useCart();
   const { settings, isAdminLoggedIn } = useStore();
+  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
@@ -116,13 +118,13 @@ export const Header: React.FC = () => {
             </Link>
 
             <Link
-              href="/hesabim"
-              aria-label="Hesabım"
+              href={user ? '/hesabim' : '/giris'}
+              aria-label={user ? 'Hesabım' : 'Giriş Yap'}
               className="group flex flex-col items-center justify-center text-[#111111] hover:text-[#55a80b] transition-colors"
             >
               <User className="w-[18px] h-[18px] stroke-[1.8]" />
               <span className="text-[10px] font-medium mt-1 leading-none text-[#52525b] group-hover:text-[#55a80b]">
-                Hesabım
+                {user ? (user.ad.split(' ')[0] || 'Hesabım').slice(0, 12) : 'Giriş Yap'}
               </span>
             </Link>
           </div>

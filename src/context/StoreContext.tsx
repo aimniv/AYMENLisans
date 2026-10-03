@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { Product, INITIAL_PRODUCTS, INITIAL_COUPONS } from '../../lib/products';
+import { Product, INITIAL_PRODUCTS } from '../../lib/products';
 import { OrderResult } from '../../lib/checkout';
+import { useAuth } from './AuthContext';
 
 export interface SiteSettings {
   storeName: string;
@@ -19,8 +20,6 @@ interface StoreContextValue {
   settings: SiteSettings;
   isLoading: boolean;
   isAdminLoggedIn: boolean;
-  loginAdmin: (token: string) => void;
-  logoutAdmin: () => void;
   refreshData: () => Promise<void>;
   addProduct: (product: Partial<Product>) => Promise<{ ok: boolean; error?: string }>;
   updateProduct: (slug: string, updates: Partial<Product>) => Promise<{ ok: boolean; error?: string }>;
@@ -59,29 +58,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return INITIAL_PRODUCTS;
   });
 
-  const [coupons, setCoupons] = useState<Record<string, number>>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('aymen_store_coupons');
-      if (saved) {
-        try {
-          return JSON.parse(saved);
-        } catch {
-          // fallback
-        }
-      }
-    }
-    return INITIAL_COUPONS;
-  });
-
+  const [coupons, setCoupons] = useState<Record<string, number>>({});
   const [orders, setOrders] = useState<OrderResult[]>([]);
   const [settings, setSettings] = useState<SiteSettings>(DEFAULT_SETTINGS);
   const [isLoading, setIsLoading] = useState(false);
-  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return Boolean(localStorage.getItem('aymen_admin_token'));
-    }
-    return false;
-  });
+  const { user } = useAuth();
+  const isAdminLoggedIn = user?.rol === 'admin';
 
   const refreshData = useCallback(async () => {
     setIsLoading(true);
@@ -90,29 +72,32 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const prodRes = await fetch('/api/products');
       if (prodRes.ok) {
         const prodData = await prodRes.json();
-        if (Array.isArray(prodData.products) && prodData.products.length > 0) {
+        if (Array.isArray(prodData.products)) {
           setProducts(prodData.products);
           localStorage.setItem('aymen_store_products', JSON.stringify(prodData.products));
         }
       }
 
-      // Fetch Orders
-      const ordRes = await fetch('/api/orders');
-      if (ordRes.ok) {
-        const ordData = await ordRes.json();
-        if (Array.isArray(ordData.orders)) {
-          setOrders(ordData.orders);
+      if (isAdminLoggedIn) {
+        // Siparişler ve kuponlar yalnızca yöneticiye açıktır
+        const ordRes = await fetch('/api/orders');
+        if (ordRes.ok) {
+          const ordData = await ordRes.json();
+          if (Array.isArray(ordData.orders)) {
+            setOrders(ordData.orders);
+          }
         }
-      }
 
-      // Fetch Coupons
-      const coupRes = await fetch('/api/coupons');
-      if (coupRes.ok) {
-        const coupData = await coupRes.json();
-        if (coupData.coupons) {
-          setCoupons(coupData.coupons);
-          localStorage.setItem('aymen_store_coupons', JSON.stringify(coupData.coupons));
+        const coupRes = await fetch('/api/coupons');
+        if (coupRes.ok) {
+          const coupData = await coupRes.json();
+          if (coupData.coupons) {
+            setCoupons(coupData.coupons);
+          }
         }
+      } else {
+        setOrders([]);
+        setCoupons({});
       }
 
       // Fetch Settings
@@ -128,21 +113,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [isAdminLoggedIn]);
 
   useEffect(() => {
     refreshData();
   }, [refreshData]);
-
-  const loginAdmin = useCallback((token: string) => {
-    localStorage.setItem('aymen_admin_token', token);
-    setIsAdminLoggedIn(true);
-  }, []);
-
-  const logoutAdmin = useCallback(() => {
-    localStorage.removeItem('aymen_admin_token');
-    setIsAdminLoggedIn(false);
-  }, []);
 
   const addProduct = useCallback(async (productData: Partial<Product>) => {
     try {
@@ -296,8 +271,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         settings,
         isLoading,
         isAdminLoggedIn,
-        loginAdmin,
-        logoutAdmin,
         refreshData,
         addProduct,
         updateProduct,
