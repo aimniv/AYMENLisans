@@ -8,13 +8,18 @@ import {
   MIN_PASSWORD_LENGTH,
   authenticate,
   checkPassword,
+  consumeToken,
   clearSessionCookie,
   createRateLimiter,
   createSession,
+  createToken,
   createUser,
+  destroyAllSessions,
   destroyOtherSessions,
   destroySession,
   getUserByEmail,
+  getUserById,
+  markVerified,
   normalizeEmail,
   requireAdmin,
   requireUser,
@@ -22,6 +27,7 @@ import {
   setPassword,
   setSessionCookie,
 } from './auth';
+import { Mailer, passwordResetEmail, verificationEmail } from './mailer';
 import * as store from './store';
 import { buildProduct } from './validate';
 
@@ -31,6 +37,12 @@ export interface AppOptions {
   secureCookies?: boolean;
   /** Harici ödeme sağlayıcısı yönlendirme adresi (ayar boşsa kullanılır). */
   paymentProviderUrl?: string;
+  /** E-posta gönderici (doğrulama ve şifre sıfırlama). */
+  mailer: Mailer;
+  /** E-postalardaki bağlantılar için sitenin kök adresi (Host başlığına güvenilmez). */
+  appUrl?: string;
+  /** IP başına saatlik kayıt sınırı (varsayılan 10). */
+  registerLimit?: number;
 }
 
 const PUBLIC_SETTING_KEYS = store.SETTING_KEYS.filter((k) => k !== 'paymentProviderUrl');
@@ -38,13 +50,33 @@ const PUBLIC_SETTING_KEYS = store.SETTING_KEYS.filter((k) => k !== 'paymentProvi
 const cleanText = (v: unknown, max: number) =>
   typeof v === 'string' ? v.trim().slice(0, max) : '';
 
-export function createApp({ db, secureCookies = false, paymentProviderUrl = '' }: AppOptions) {
+export function createApp({
+  db,
+  mailer,
+  appUrl = 'http://localhost:3000',
+  secureCookies = false,
+  paymentProviderUrl = '',
+  registerLimit = 10,
+}: AppOptions) {
   const app = express();
   app.disable('x-powered-by');
   if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? 1 : process.env.TRUST_PROXY);
 
   const loginLimiter = createRateLimiter(10, 15 * 60 * 1000);
-  const registerLimiter = createRateLimiter(10, 60 * 60 * 1000);
+  const registerLimiter = createRateLimiter(registerLimit, 60 * 60 * 1000);
+  const forgotLimiter = createRateLimiter(5, 60 * 60 * 1000);
+  const resendLimiter = createRateLimiter(3, 60 * 60 * 1000);
+  const baseUrl = appUrl.replace(/\/+$/, '');
+
+  /** Gönderim hatası isteği düşürmez ve yanıt süresini etkilemez. */
+  const sendMail = (mail: Parameters<Mailer['send']>[0]) => {
+    mailer.send(mail).catch((err: Error) => console.error('E-posta gönderilemedi:', err.message));
+  };
+
+  const sendVerification = (user: { id: number; ad: string; eposta: string }) => {
+    const token = createToken(db, user.id, 'dogrulama');
+    sendMail(verificationEmail(user.eposta, user.ad, `${baseUrl}/eposta-dogrula?token=${token}`));
+  };
 
   // ---------- Genel middleware ----------
   app.use((_req, res, next) => {
@@ -115,6 +147,7 @@ export function createApp({ db, secureCookies = false, paymentProviderUrl = '' }
     }
 
     const user = createUser(db, { ad, eposta, telefon, sifre });
+    sendVerification(user);
     const { token } = createSession(db, user.id);
     setSessionCookie(res, token, isSecure(req));
     res.status(201).json({ ok: true, user });
@@ -172,13 +205,13 @@ export function createApp({ db, secureCookies = false, paymentProviderUrl = '' }
       res.status(409).json({ error: 'Bu e-posta adresi başka bir hesap tarafından kullanılıyor.' });
       return;
     }
-    db.prepare('UPDATE users SET ad = ?, eposta = ?, telefon = ? WHERE id = ?').run(
-      ad,
-      eposta,
-      telefon,
-      req.user!.id
-    );
-    res.json({ ok: true, user: { ...req.user!, ad, eposta, telefon } });
+    const emailChanged = eposta !== req.user!.eposta;
+    db.prepare(
+      'UPDATE users SET ad = ?, eposta = ?, telefon = ?, dogrulandi = CASE WHEN ? THEN 0 ELSE dogrulandi END WHERE id = ?'
+    ).run(ad, eposta, telefon, emailChanged ? 1 : 0, req.user!.id);
+    // E-posta değiştiyse yeni adres yeniden doğrulanmalıdır.
+    if (emailChanged) sendVerification({ id: req.user!.id, ad, eposta });
+    res.json({ ok: true, user: getUserById(db, req.user!.id) });
   });
 
   app.put('/api/auth/password', requireUser, (req, res) => {
@@ -196,6 +229,69 @@ export function createApp({ db, secureCookies = false, paymentProviderUrl = '' }
     setPassword(db, req.user!.id, yeni);
     // Diğer cihazlardaki oturumlar kapatılır.
     destroyOtherSessions(db, req.user!.id, req.sessionToken);
+    res.json({ ok: true });
+  });
+
+  // ---------- E-posta doğrulama & şifre sıfırlama ----------
+
+  app.post('/api/auth/verify-email', (req, res) => {
+    const token = typeof req.body?.token === 'string' ? req.body.token : '';
+    const userId = token ? consumeToken(db, token, 'dogrulama') : null;
+    if (!userId) {
+      res.status(400).json({ error: 'Doğrulama bağlantısı geçersiz veya süresi dolmuş.' });
+      return;
+    }
+    markVerified(db, userId);
+    res.json({ ok: true });
+  });
+
+  app.post('/api/auth/resend-verification', requireUser, (req, res) => {
+    if (req.user!.dogrulandi) {
+      res.json({ ok: true });
+      return;
+    }
+    if (!resendLimiter.take(String(req.user!.id))) {
+      res.status(429).json({ error: 'Çok fazla istek. Lütfen daha sonra tekrar deneyiniz.' });
+      return;
+    }
+    sendVerification(req.user!);
+    res.json({ ok: true });
+  });
+
+  app.post('/api/auth/forgot-password', (req, res) => {
+    const eposta = normalizeEmail(req.body?.eposta);
+    if (!EMAIL_REGEX.test(eposta)) {
+      res.status(400).json({ error: 'Lütfen geçerli bir e-posta adresi giriniz.' });
+      return;
+    }
+    if (!forgotLimiter.take(clientKey(req, eposta))) {
+      res.status(429).json({ error: 'Çok fazla istek. Lütfen daha sonra tekrar deneyiniz.' });
+      return;
+    }
+    // Hesap var olsun ya da olmasın aynı yanıt döner (e-posta taramasını önlemek için).
+    const user = getUserByEmail(db, eposta);
+    if (user) {
+      const token = createToken(db, user.id, 'sifirlama');
+      sendMail(passwordResetEmail(user.eposta, user.ad, `${baseUrl}/sifre-sifirla?token=${token}`));
+    }
+    res.json({ ok: true });
+  });
+
+  app.post('/api/auth/reset-password', (req, res) => {
+    const token = typeof req.body?.token === 'string' ? req.body.token : '';
+    const yeni = typeof req.body?.yeniSifre === 'string' ? req.body.yeniSifre : '';
+    if (yeni.length < MIN_PASSWORD_LENGTH || yeni.length > 200) {
+      res.status(400).json({ error: `Yeni şifre en az ${MIN_PASSWORD_LENGTH} karakter olmalıdır.` });
+      return;
+    }
+    const userId = token ? consumeToken(db, token, 'sifirlama') : null;
+    if (!userId) {
+      res.status(400).json({ error: 'Şifre sıfırlama bağlantısı geçersiz veya süresi dolmuş.' });
+      return;
+    }
+    setPassword(db, userId, yeni);
+    markVerified(db, userId); // e-postaya erişimini kanıtladı
+    destroyAllSessions(db, userId);
     res.json({ ok: true });
   });
 
@@ -367,6 +463,13 @@ export function createApp({ db, secureCookies = false, paymentProviderUrl = '' }
   };
 
   app.post('/api/checkout', requireUser, (req, res) => {
+    if (!req.user!.dogrulandi) {
+      res.status(403).json({
+        error: 'Sipariş vermek için e-posta adresinizi doğrulamalısınız.',
+        kod: 'EPOSTA_DOGRULANMADI',
+      });
+      return;
+    }
     const result = processCheckoutRequest(
       req.body,
       store.getSettings(db).paymentProviderUrl || paymentProviderUrl,

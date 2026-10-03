@@ -5,14 +5,23 @@ import type { Server } from 'node:http';
 import { createApp } from './app';
 import { ensureAdmin } from './auth';
 import { openDb } from './db';
+import type { Mail } from './mailer';
 
 let server: Server;
 let base: string;
+const outbox: Mail[] = [];
+
+/** Bir adrese gönderilen son e-postadaki token'ı döndürür. */
+function lastToken(to: string, subjectPart: string): string | null {
+  const mail = [...outbox].reverse().find((m) => m.to === to && m.subject.includes(subjectPart));
+  return mail?.text.match(/token=([\w-]+)/)?.[1] ?? null;
+}
 
 before(() => {
   const db = openDb(':memory:');
   ensureAdmin(db, 'admin@test.com', 'adminpass123');
-  server = createApp({ db }).listen(0);
+  const mailer = { send: async (m: Mail) => void outbox.push(m) };
+  server = createApp({ db, mailer, appUrl: 'https://magaza.example/', registerLimit: 1000 }).listen(0);
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 
@@ -38,6 +47,13 @@ function client() {
     const text = await res.text();
     return { status: res.status, body: text ? JSON.parse(text) : null, setCookie: set };
   };
+}
+
+/** E-posta doğrulama bağlantısını çalıştırır. */
+async function verify(c: ReturnType<typeof client>, eposta: string) {
+  const token = lastToken(eposta, 'doğrulayın');
+  assert.ok(token, 'doğrulama e-postası gönderilmiş olmalı');
+  assert.equal((await c('POST', '/api/auth/verify-email', { token })).status, 200);
 }
 
 const checkoutBody = (slug = 'windows-10-home') => ({
@@ -121,6 +137,7 @@ test('sipariş: giriş şart, fiyat sunucuda hesaplanır, yalnızca sahibi gör�
 
   const a = client();
   await a('POST', '/api/auth/register', { ad: 'Kişi Bir', eposta: 'bir@example.com', sifre: 'sifre1234' });
+  await verify(a, 'bir@example.com');
   const b = client();
   await b('POST', '/api/auth/register', { ad: 'Kişi İki', eposta: 'iki@example.com', sifre: 'sifre1234' });
 
@@ -137,6 +154,7 @@ test('sipariş: giriş şart, fiyat sunucuda hesaplanır, yalnızca sahibi gör�
 test('admin: sipariş durumu/lisans, ürün ekleme-güncelleme-silme', async () => {
   const buyer = client();
   await buyer('POST', '/api/auth/register', { ad: 'Alıcı Kişi', eposta: 'alici@example.com', sifre: 'sifre1234' });
+  await verify(buyer, 'alici@example.com');
   const { body } = await buyer('POST', '/api/checkout', checkoutBody());
 
   const admin = client();
@@ -211,4 +229,88 @@ test('başka siteden gelen yazma istekleri reddedilir; bilinmeyen api yolu JSON 
   assert.equal((await c('GET', '/api/yok')).status, 404);
   const bad = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{bozuk' });
   assert.equal(bad.status, 400);
+});
+
+test('e-posta doğrulama: doğrulanmadan sipariş yok, bağlantı tek kullanımlık', async () => {
+  const c = client();
+  const reg = await c('POST', '/api/auth/register', { ad: 'Doğrulama Test', eposta: 'dogrula@example.com', sifre: 'sifre1234' });
+  assert.equal(reg.body.user.dogrulandi, false);
+
+  const mail = outbox.find((m) => m.to === 'dogrula@example.com');
+  assert.ok(mail);
+  assert.match(mail.text, /^.*https:\/\/magaza\.example\/eposta-dogrula\?token=/m);
+
+  const blocked = await c('POST', '/api/checkout', checkoutBody());
+  assert.equal(blocked.status, 403);
+  assert.equal(blocked.body.kod, 'EPOSTA_DOGRULANMADI');
+
+  assert.equal((await c('POST', '/api/auth/verify-email', { token: 'sahte' })).status, 400);
+  const token = lastToken('dogrula@example.com', 'doğrulayın')!;
+  assert.equal((await c('POST', '/api/auth/verify-email', { token })).status, 200);
+  assert.equal((await c('POST', '/api/auth/verify-email', { token })).status, 400);
+
+  assert.equal((await c('GET', '/api/auth/me')).body.user.dogrulandi, true);
+  assert.equal((await c('POST', '/api/checkout', checkoutBody())).status, 200);
+});
+
+test('doğrulama e-postası yeniden gönderilir (sınırlı); e-posta değişince tekrar doğrulanır', async () => {
+  const c = client();
+  await c('POST', '/api/auth/register', { ad: 'Tekrar Test', eposta: 'tekrar@example.com', sifre: 'sifre1234' });
+  const first = lastToken('tekrar@example.com', 'doğrulayın');
+
+  assert.equal((await c('POST', '/api/auth/resend-verification')).status, 200);
+  const second = lastToken('tekrar@example.com', 'doğrulayın');
+  assert.notEqual(first, second);
+  // eski bağlantı geçersiz
+  assert.equal((await c('POST', '/api/auth/verify-email', { token: first })).status, 400);
+
+  await c('POST', '/api/auth/resend-verification');
+  await c('POST', '/api/auth/resend-verification');
+  assert.equal((await c('POST', '/api/auth/resend-verification')).status, 429);
+
+  await verify(c, 'tekrar@example.com');
+  assert.equal((await c('GET', '/api/auth/me')).body.user.dogrulandi, true);
+
+  const upd = await c('PUT', '/api/auth/profile', { ad: 'Tekrar Test', eposta: 'yeni-adres@example.com' });
+  assert.equal(upd.body.user.dogrulandi, false);
+  assert.ok(lastToken('yeni-adres@example.com', 'doğrulayın'));
+});
+
+test('şifre sıfırlama: hesap var/yok aynı yanıt, tek kullanımlık, oturumları kapatır', async () => {
+  const phone = client();
+  await phone('POST', '/api/auth/register', { ad: 'Unutkan Kişi', eposta: 'unutkan@example.com', sifre: 'eskisifre1' });
+
+  const before = outbox.length;
+  const unknown = await client()('POST', '/api/auth/forgot-password', { eposta: 'hic-yok@example.com' });
+  const known = await client()('POST', '/api/auth/forgot-password', { eposta: 'Unutkan@Example.com' });
+  assert.deepEqual(unknown.body, known.body);
+  assert.equal(unknown.status, 200);
+  assert.equal(outbox.length, before + 1); // yalnızca var olan hesaba e-posta gider
+  assert.equal(outbox[outbox.length - 1].to, 'unutkan@example.com');
+  assert.match(outbox[outbox.length - 1].text, /https:\/\/magaza\.example\/sifre-sifirla\?token=/);
+
+  const token = lastToken('unutkan@example.com', 'sıfırlama')!;
+  const anon = client();
+  assert.equal((await anon('POST', '/api/auth/reset-password', { token: 'sahte', yeniSifre: 'yenisifre1' })).status, 400);
+  assert.equal((await anon('POST', '/api/auth/reset-password', { token, yeniSifre: 'kisa' })).status, 400);
+  assert.equal((await anon('POST', '/api/auth/reset-password', { token, yeniSifre: 'yenisifre1' })).status, 200);
+  // aynı bağlantı ikinci kez kullanılamaz
+  assert.equal((await anon('POST', '/api/auth/reset-password', { token, yeniSifre: 'baskasifre1' })).status, 400);
+
+  assert.equal((await phone('GET', '/api/auth/me')).body.user, null);
+  assert.equal((await client()('POST', '/api/auth/login', { eposta: 'unutkan@example.com', sifre: 'eskisifre1' })).status, 401);
+  const login = await client()('POST', '/api/auth/login', { eposta: 'unutkan@example.com', sifre: 'yenisifre1' });
+  assert.equal(login.status, 200);
+  assert.equal(login.body.user.dogrulandi, true); // e-postaya erişimini kanıtladı
+});
+
+test('şifre sıfırlama istekleri sınırlanır; doğrulama token\'ı sıfırlamada kullanılamaz', async () => {
+  const c = client();
+  let last = 0;
+  for (let i = 0; i < 7; i++) last = (await c('POST', '/api/auth/forgot-password', { eposta: 'sinir@example.com' })).status;
+  assert.equal(last, 429);
+
+  await c('POST', '/api/auth/register', { ad: 'Çapraz Test', eposta: 'capraz@example.com', sifre: 'sifre1234' });
+  const verifyToken = lastToken('capraz@example.com', 'doğrulayın')!;
+  assert.equal((await client()('POST', '/api/auth/reset-password', { token: verifyToken, yeniSifre: 'yenisifre1' })).status, 400);
 });

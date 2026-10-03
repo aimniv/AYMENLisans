@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
+import { VerifyEmailNotice } from '../components/VerifyEmailNotice';
 import { ProductVisual } from '../components/ProductVisual';
 import { formatPriceTL } from '../../lib/products';
 import { Link, useRouter } from '../context/RouterContext';
@@ -163,6 +164,19 @@ export const CheckoutPage: React.FC = () => {
               Giriş Yap / Üye Ol
             </Link>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user.dogrulandi) {
+    return (
+      <div className="bg-[#f1f2f3] min-h-[65vh] py-10">
+        <div className="max-w-[560px] mx-auto px-4">
+          <VerifyEmailNotice />
+          <p className="text-[10px] text-[#737373] mt-3 text-center">
+            Doğruladıktan sonra bu sayfayı yenileyin; sepetiniz korunur.
+          </p>
         </div>
       </div>
     );

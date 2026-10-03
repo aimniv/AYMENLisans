@@ -7,6 +7,7 @@ export interface AuthUser {
   eposta: string;
   telefon: string;
   rol: 'uye' | 'admin';
+  dogrulandi: boolean;
 }
 
 type Result = { ok: true } | { ok: false; error: string };
@@ -23,6 +24,12 @@ interface AuthContextValue {
   logout: () => Promise<void>;
   updateProfile: (input: { ad: string; eposta: string; telefon: string }) => Promise<Result>;
   changePassword: (mevcutSifre: string, yeniSifre: string) => Promise<Result>;
+  /** Oturumdaki kullanıcıyı sunucudan yeniden okur (ör. e-posta doğrulandıktan sonra). */
+  refreshUser: () => Promise<void>;
+  resendVerification: () => Promise<Result>;
+  verifyEmail: (token: string) => Promise<Result>;
+  forgotPassword: (eposta: string) => Promise<Result>;
+  resetPassword: (token: string, yeniSifre: string) => Promise<Result>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -89,6 +96,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { ok: true };
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    const { ok, data } = await request('GET', '/api/auth/me');
+    if (ok) setUser(data.user ?? null);
+  }, []);
+
+  const resendVerification = useCallback<AuthContextValue['resendVerification']>(async () => {
+    const { ok, data } = await request('POST', '/api/auth/resend-verification');
+    return ok ? { ok: true } : { ok: false, error: data.error || 'E-posta gönderilemedi.' };
+  }, []);
+
+  const verifyEmail = useCallback<AuthContextValue['verifyEmail']>(async (token) => {
+    const { ok, data } = await request('POST', '/api/auth/verify-email', { token });
+    if (!ok) return { ok: false, error: data.error || 'E-posta doğrulanamadı.' };
+    await refreshUser();
+    return { ok: true };
+  }, [refreshUser]);
+
+  const forgotPassword = useCallback<AuthContextValue['forgotPassword']>(async (eposta) => {
+    const { ok, data } = await request('POST', '/api/auth/forgot-password', { eposta });
+    return ok ? { ok: true } : { ok: false, error: data.error || 'İstek gönderilemedi.' };
+  }, []);
+
+  const resetPassword = useCallback<AuthContextValue['resetPassword']>(async (token, yeniSifre) => {
+    const { ok, data } = await request('POST', '/api/auth/reset-password', { token, yeniSifre });
+    return ok ? { ok: true } : { ok: false, error: data.error || 'Şifre sıfırlanamadı.' };
+  }, []);
+
   const logout = useCallback(async () => {
     await request('POST', '/api/auth/logout');
     setUser(null);
@@ -122,6 +156,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         logout,
         updateProfile,
         changePassword,
+        refreshUser,
+        resendVerification,
+        verifyEmail,
+        forgotPassword,
+        resetPassword,
       }}
     >
       {children}

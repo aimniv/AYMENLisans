@@ -193,6 +193,14 @@ export const LoginPage: React.FC<{ initialMode?: Mode }> = ({ initialMode = 'gir
               />
             </div>
 
+            {mode === 'giris' && (
+              <div className="text-right -mt-1.5">
+                <Link href="/sifremi-unuttum" className="text-[10px] text-[#55a80b] hover:underline font-medium">
+                  Şifremi unuttum
+                </Link>
+              </div>
+            )}
+
             {mode === 'kayit' && (
               <div>
                 <label htmlFor="auth-pass2" className="block text-[9px] font-semibold text-[#374151] mb-1">

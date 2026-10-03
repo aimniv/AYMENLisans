@@ -18,6 +18,7 @@ import { useStore } from '../context/StoreContext';
 import { useAuth } from '../context/AuthContext';
 import { formatPriceSymbol } from '../../lib/products';
 import { ProductVisual } from '../components/ProductVisual';
+import { VerifyEmailNotice } from '../components/VerifyEmailNotice';
 import { Link, useRouter } from '../context/RouterContext';
 
 type AccountTab = 'siparislerim' | 'cuzdanim' | 'bilgilerim' | 'sifre';
@@ -233,6 +234,7 @@ export const AccountPage: React.FC = () => {
 
           {/* Sağ İçerik Sütunu */}
           <div className="flex-1 min-w-0 w-full">
+            <VerifyEmailNotice className="mb-3.5" />
             {activeTab === 'siparislerim' && (
               <div>
                 <h1 className="text-[15px] font-bold text-[#111111] mb-3.5">

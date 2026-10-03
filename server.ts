@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { createApp } from './server/app';
+import { createMailer } from './server/mailer';
 import { ensureAdmin, normalizeEmail } from './server/auth';
 import { openDb } from './server/db';
 
@@ -28,8 +29,15 @@ async function startServer() {
     console.log('────────────────────────────────────────────────');
   }
 
+  const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
+  if (isProd && !process.env.APP_URL) {
+    console.warn('APP_URL tanımlı değil: e-postalardaki bağlantılar localhost adresini gösterecek.');
+  }
+
   const app = createApp({
     db,
+    mailer: createMailer(),
+    appUrl,
     secureCookies: isProd,
     paymentProviderUrl: process.env.PAYMENT_PROVIDER_CHECKOUT_URL,
   });

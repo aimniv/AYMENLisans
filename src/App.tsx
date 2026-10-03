@@ -16,6 +16,7 @@ import { AccountPage } from './pages/AccountPage';
 import { CorporatePage } from './pages/CorporatePage';
 import { AdminPage } from './pages/AdminPage';
 import { LoginPage } from './pages/LoginPage';
+import { ForgotPasswordPage, ResetPasswordPage, VerifyEmailPage } from './pages/EmailPages';
 
 const AppRoutes: React.FC = () => {
   const { pathname } = useRouter();
@@ -81,6 +82,16 @@ const AppRoutes: React.FC = () => {
   }
   if (cleanPath === '/kayit') {
     return <LoginPage key="kayit" initialMode="kayit" />;
+  }
+
+  if (cleanPath === '/eposta-dogrula') {
+    return <VerifyEmailPage />;
+  }
+  if (cleanPath === '/sifremi-unuttum') {
+    return <ForgotPasswordPage />;
+  }
+  if (cleanPath === '/sifre-sifirla') {
+    return <ResetPasswordPage />;
   }
 
   if (cleanPath === '/hesabim') {

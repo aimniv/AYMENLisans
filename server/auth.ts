@@ -11,10 +11,12 @@ export interface PublicUser {
   eposta: string;
   telefon: string;
   rol: 'uye' | 'admin';
+  dogrulandi: boolean;
 }
 
-interface UserRow extends PublicUser {
+interface UserRow extends Omit<PublicUser, 'dogrulandi'> {
   sifre_hash: string;
+  dogrulandi: number;
 }
 
 // ---------- Şifre ----------
@@ -54,15 +56,23 @@ const toPublic = (row: UserRow): PublicUser => ({
   eposta: row.eposta,
   telefon: row.telefon,
   rol: row.rol,
+  dogrulandi: row.dogrulandi === 1,
 });
 
 export function createUser(
   db: Db,
-  input: { ad: string; eposta: string; telefon?: string; sifre: string; rol?: 'uye' | 'admin' }
+  input: { ad: string; eposta: string; telefon?: string; sifre: string; rol?: 'uye' | 'admin'; dogrulandi?: boolean }
 ): PublicUser {
   const res = db
-    .prepare('INSERT INTO users (eposta, ad, telefon, sifre_hash, rol) VALUES (?, ?, ?, ?, ?)')
-    .run(input.eposta, input.ad, input.telefon ?? '', hashPassword(input.sifre), input.rol ?? 'uye');
+    .prepare('INSERT INTO users (eposta, ad, telefon, sifre_hash, rol, dogrulandi) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(
+      input.eposta,
+      input.ad,
+      input.telefon ?? '',
+      hashPassword(input.sifre),
+      input.rol ?? 'uye',
+      input.dogrulandi ? 1 : 0
+    );
   return getUserById(db, Number(res.lastInsertRowid))!;
 }
 
@@ -128,6 +138,49 @@ function userFromToken(db: Db, token: string): PublicUser | null {
     )
     .get(sha256(token), Date.now()) as unknown as UserRow | undefined;
   return row ? toPublic(row) : null;
+}
+
+// ---------- E-posta doğrulama / şifre sıfırlama token'ları ----------
+
+export type TokenKind = 'dogrulama' | 'sifirlama';
+
+const TOKEN_TTL_MS: Record<TokenKind, number> = {
+  dogrulama: 24 * 60 * 60 * 1000,
+  sifirlama: 60 * 60 * 1000,
+};
+
+/** Tek kullanımlık token üretir; aynı türdeki önceki token'lar geçersiz kılınır. */
+export function createToken(db: Db, userId: number, kind: TokenKind): string {
+  const token = crypto.randomBytes(32).toString('base64url');
+  db.prepare('DELETE FROM tokens WHERE bitis < ?').run(Date.now());
+  db.prepare('DELETE FROM tokens WHERE user_id = ? AND tur = ?').run(userId, kind);
+  db.prepare('INSERT INTO tokens (token_hash, user_id, tur, bitis) VALUES (?, ?, ?, ?)').run(
+    sha256(token),
+    userId,
+    kind,
+    Date.now() + TOKEN_TTL_MS[kind]
+  );
+  return token;
+}
+
+/** Token'ı doğrular ve tüketir (tek kullanımlık). Geçersizse null döner. */
+export function consumeToken(db: Db, token: string, kind: TokenKind): number | null {
+  const hash = sha256(token);
+  const row = db
+    .prepare('SELECT user_id, bitis FROM tokens WHERE token_hash = ? AND tur = ?')
+    .get(hash, kind) as { user_id: number; bitis: number } | undefined;
+  if (!row) return null;
+  db.prepare('DELETE FROM tokens WHERE token_hash = ?').run(hash);
+  return row.bitis > Date.now() ? row.user_id : null;
+}
+
+export function markVerified(db: Db, userId: number) {
+  db.prepare('UPDATE users SET dogrulandi = 1 WHERE id = ?').run(userId);
+}
+
+/** Kullanıcının tüm oturumlarını kapatır. */
+export function destroyAllSessions(db: Db, userId: number) {
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
 }
 
 // ---------- Cookie ----------
@@ -246,11 +299,11 @@ export function ensureAdmin(db: Db, eposta: string, password?: string): { create
   const existing = getUserByEmail(db, eposta);
   if (!existing) {
     const sifre = password ?? crypto.randomBytes(12).toString('base64url');
-    createUser(db, { ad: 'Yönetici', eposta, sifre, rol: 'admin' });
+    createUser(db, { ad: 'Yönetici', eposta, sifre, rol: 'admin', dogrulandi: true });
     return { created: true, generatedPassword: password ? undefined : sifre };
   }
   if (existing.rol !== 'admin') {
-    db.prepare("UPDATE users SET rol = 'admin' WHERE id = ?").run(existing.id);
+    db.prepare("UPDATE users SET rol = 'admin', dogrulandi = 1 WHERE id = ?").run(existing.id);
   }
   if (password !== undefined && !checkPassword(db, existing.id, password)) {
     setPassword(db, existing.id, password);

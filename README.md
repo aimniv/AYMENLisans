@@ -41,6 +41,8 @@ Kullanıcı dostu, kompakt ve minimalist bir tasarıma sahip olan platform; dina
   - E-posta + şifre ile üye olma ve giriş yapma (`/giris`, `/kayit`). Sipariş vermek için giriş gerekir.
   - Müşterinin yalnızca **kendi** siparişlerini, teslimat durumunu ve yöneticinin tanımladığı lisans anahtarlarını görmesi (`Kopyala` butonu).
   - Ad / e-posta / telefon güncelleme ve şifre değiştirme (şifre değişince diğer cihazlardaki oturumlar kapanır).
+  - **E-posta doğrulama:** Kayıtta doğrulama bağlantısı (24 saat) gönderilir; sipariş vermek için e-posta doğrulanmalıdır. E-posta adresi değişirse yeniden doğrulanır.
+  - **Şifre sıfırlama:** `/sifremi-unuttum` ile 1 saat geçerli, tek kullanımlık bağlantı gönderilir; sıfırlayınca tüm oturumlar kapanır. Hesap var/yok aynı yanıt verilir.
 
 ---
 
@@ -61,6 +63,8 @@ Kullanıcı dostu, kompakt ve minimalist bir tasarıma sahip olan platform; dina
 | `/checkout` | Ad, telefon, fatura tipi, ödeme yöntemi seçimi (giriş gerekir, kart bilgisi toplanmaz). |
 | `/siparis-tamamlandi` | Sipariş onay ekranı, sipariş kodu ve teslimat yönergesi. |
 | `/giris`, `/kayit` | Üye girişi ve üyelik oluşturma. |
+| `/sifremi-unuttum`, `/sifre-sifirla` | Şifre sıfırlama isteği ve yeni şifre belirleme. |
+| `/eposta-dogrula` | E-postadaki doğrulama bağlantısının açıldığı sayfa. |
 | `/hesabim` | Müşteri siparişleri, lisans anahtarları ve profil bilgileri (giriş gerekir). |
 | `/iletisim` | Destek kanalları, çalışma saatleri ve iletişim formu. |
 | **`/admin`** | **Tüm sitenin yönetildiği şifreli yönetim paneli.** |
@@ -87,9 +91,12 @@ Veriler **SQLite** (`node:sqlite`, Node ≥ 22.5) ile `data/aymenlisans.db` dosy
 | :--- | :--- | :--- |
 | `POST /api/auth/register`, `/login`, `/logout` | herkes | Üyelik, giriş, çıkış |
 | `GET /api/auth/me` | herkes | Oturumdaki kullanıcı (yoksa `null`) |
+| `POST /api/auth/verify-email` | herkes | E-posta doğrulama token'ını tüketir |
+| `POST /api/auth/resend-verification` | üye | Doğrulama e-postasını tekrar gönderir (saatte 3) |
+| `POST /api/auth/forgot-password`, `/reset-password` | herkes | Şifre sıfırlama bağlantısı iste / yeni şifre belirle |
 | `PUT /api/auth/profile`, `/password` | üye | Profil ve şifre güncelleme |
 | `GET /api/my/orders` | üye | Üyenin kendi siparişleri ve lisansları |
-| `POST /api/checkout` | üye | Sipariş oluşturur (fiyat/kupon sunucuda hesaplanır) |
+| `POST /api/checkout` | doğrulanmış üye | Sipariş oluşturur (fiyat/kupon sunucuda hesaplanır) |
 | `GET /api/products` | herkes | Ürün kataloğu |
 | `POST/PUT/DELETE /api/products` | admin | Ürün yönetimi |
 | `GET/PUT/DELETE /api/orders` | admin | Tüm siparişler, durum ve lisans tanımlama |
@@ -138,6 +145,12 @@ Sunucu varsayılan olarak `http://localhost:3000` adresinde çalışacaktır.
 
 ```env
 PORT=3000
+APP_URL="https://siteniz.com"             # E-posta bağlantılarının kök adresi
+SMTP_HOST=""                           # Boşsa e-postalar konsola yazılır
+SMTP_PORT="587"
+SMTP_USER=""
+SMTP_PASS=""
+MAIL_FROM="AYMENLisans <no-reply@siteniz.com>"
 DATABASE_PATH="./data/aymenlisans.db"   # SQLite dosyası
 ADMIN_EMAIL="admin@aymenlisans.com"     # Yönetici hesabı e-postası
 ADMIN_PASSWORD=""                       # En az 8 karakter; boşsa ilk açılışta rastgele üretilir

@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
   telefon TEXT NOT NULL DEFAULT '',
   sifre_hash TEXT NOT NULL,
   rol TEXT NOT NULL DEFAULT 'uye' CHECK (rol IN ('uye', 'admin')),
+  dogrulandi INTEGER NOT NULL DEFAULT 0,
   olusturma TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -22,6 +23,14 @@ CREATE TABLE IF NOT EXISTS sessions (
   bitis INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS tokens (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  tur TEXT NOT NULL CHECK (tur IN ('dogrulama', 'sifirlama')),
+  bitis INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tokens_user ON tokens(user_id, tur);
 
 CREATE TABLE IF NOT EXISTS products (
   slug TEXT PRIMARY KEY,
@@ -72,8 +81,19 @@ export function openDb(file: string): Db {
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(SCHEMA);
+  migrate(db);
   seed(db);
   return db;
+}
+
+/** Eski veritabanlarını yeni şemaya taşır. */
+function migrate(db: Db) {
+  const cols = db.prepare('PRAGMA table_info(users)').all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'dogrulandi')) {
+    db.exec('ALTER TABLE users ADD COLUMN dogrulandi INTEGER NOT NULL DEFAULT 0');
+    // Yönetici hesapları doğrulanmış sayılır.
+    db.exec("UPDATE users SET dogrulandi = 1 WHERE rol = 'admin'");
+  }
 }
 
 function seed(db: Db) {
