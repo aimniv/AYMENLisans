@@ -39,6 +39,7 @@ export const AdminPage: React.FC = () => {
     deleteProduct,
     updateOrder,
     deleteOrder,
+    verifyOrderPayment,
     addCoupon,
     deleteCoupon,
     updateSettings,
@@ -806,6 +807,7 @@ export const AdminPage: React.FC = () => {
                             }
                             className="text-[9px] font-bold border border-[#ececec] rounded px-1.5 py-1 bg-white focus:outline-none focus:border-[#55a80b]"
                           >
+                            <option value="Ödeme Bekleniyor">Ödeme Bekleniyor</option>
                             <option value="Teslim Edildi">Teslim Edildi</option>
                             <option value="Teslimat Hazırlanıyor">Teslimat Hazırlanıyor</option>
                             <option value="Ödeme Bildirimi Bekleniyor">Ödeme Bildirimi Bekleniyor</option>
@@ -814,6 +816,25 @@ export const AdminPage: React.FC = () => {
                         </td>
                         <td className="py-3 px-4 text-right">
                           <div className="inline-flex items-center gap-2">
+                            {order.durum === 'Ödeme Bekleniyor' && order.odemeYontemi === 'kredi-karti' && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const res = await verifyOrderPayment(order.siparisNo);
+                                  const mesaj = !res.ok
+                                    ? res.error
+                                    : res.sonuc === 'paid'
+                                      ? 'Ödeme alınmış; sipariş güncellendi.'
+                                      : res.sonuc === 'pending'
+                                        ? 'Ödeme henüz tamamlanmamış veya başarısız.'
+                                        : 'Ödeme doğrulanamadı; sunucu günlüğüne bakın.';
+                                  alert(mesaj);
+                                }}
+                                className="bg-[#0284c7]/10 text-[#0284c7] hover:bg-[#0284c7] hover:text-white px-2.5 py-1 rounded text-[10px] font-bold transition-colors cursor-pointer"
+                              >
+                                Ödemeyi Sorgula
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => {
@@ -1020,22 +1041,6 @@ export const AdminPage: React.FC = () => {
                     onChange={(e) => setSettingsForm({ ...settingsForm, bankIban: e.target.value })}
                     className="w-full h-[36px] px-3 bg-[#f6f6f7] border border-[#ececec] rounded-[8px] text-[11px] text-[#111111] focus:outline-none focus:border-[#55a80b]"
                   />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold text-[#374151] mb-1">
-                    Kartlı Ödeme Yönlendirme URL'si (Opsiyonel / PAYMENT_PROVIDER_CHECKOUT_URL)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="https://odeme.iyzico.com/... veya boş bırakın"
-                    value={settingsForm.paymentProviderUrl}
-                    onChange={(e) => setSettingsForm({ ...settingsForm, paymentProviderUrl: e.target.value })}
-                    className="w-full h-[36px] px-3 bg-[#f6f6f7] border border-[#ececec] rounded-[8px] text-[11px] text-[#111111] focus:outline-none focus:border-[#55a80b]"
-                  />
-                  <span className="text-[9px] text-[#737373] mt-1 block">
-                    Boş bırakıldığında simülasyon modunda doğrudan sipariş oluşturulur.
-                  </span>
                 </div>
 
                 <button

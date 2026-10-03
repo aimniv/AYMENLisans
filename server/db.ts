@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS orders (
   siparis_no TEXT PRIMARY KEY,
   user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   sira INTEGER NOT NULL,
-  data TEXT NOT NULL
+  data TEXT NOT NULL,
+  odeme_token TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id);
 
@@ -64,7 +65,6 @@ export const DEFAULT_SETTINGS = {
   whatsappNumber: '+90 536 565 70 03',
   workHours: 'Hafta içi 09:00 - 18:00',
   bankIban: 'TR33 0006 1005 1978 6451 0001 24 (Ziraat Bankası - AYMEN Dijital)',
-  paymentProviderUrl: '',
 };
 
 export type Settings = typeof DEFAULT_SETTINGS;
@@ -94,6 +94,14 @@ function migrate(db: Db) {
     // Yönetici hesapları doğrulanmış sayılır.
     db.exec("UPDATE users SET dogrulandi = 1 WHERE rol = 'admin'");
   }
+
+  const orderCols = db.prepare('PRAGMA table_info(orders)').all() as { name: string }[];
+  if (!orderCols.some((c) => c.name === 'odeme_token')) {
+    db.exec('ALTER TABLE orders ADD COLUMN odeme_token TEXT');
+  }
+  db.exec(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_odeme_token ON orders(odeme_token) WHERE odeme_token IS NOT NULL'
+  );
 }
 
 function seed(db: Db) {

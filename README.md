@@ -23,10 +23,11 @@ Kullanıcı dostu, kompakt ve minimalist bir tasarıma sahip olan platform; dina
   - Dinamik kupon desteği (Örn: `%10` indirim sağlayan `HOSGELDIN` kuponu).
   - Adet seçici (1–10 arası) ve anında tutar hesaplama.
 
-- **🔒 Güvenli Ödeme Mimarisi:**
-  - Sitede kart numarası, son kullanma tarihi veya CVV bilgisi **toplanmaz** ve **saklanmaz**.
-  - Kredi / Banka kartı seçildiğinde lisanslı ödeme kuruluşunun (iyzico, PayTR vb.) barındırılan güvenli ödeme sayfasına yönlendirme yapılır.
-  - Havale / EFT seçeneğiyle sipariş oluşturulup IBAN ve ödeme bildirim talimatları e-posta ile iletilir.
+- **🔒 Güvenli Ödeme Mimarisi (iyzico):**
+  - Sitede kart numarası, son kullanma tarihi veya CVV bilgisi **toplanmaz** ve **saklanmaz**; müşteri iyzico'nun barındırılan **Ortak Ödeme Sayfası**'na yönlendirilir.
+  - Akış: sipariş `Ödeme Bekleniyor` olarak kaydedilir → iyzico ödeme oturumu açılır → müşteri öder → iyzico müşteriyi `/odeme/iyzico/callback` adresine döndürür → sunucu sonucu iyzico'dan **token ile kendisi sorgular** (yanıt imzası doğrulanır; sipariş no ve tutar eşleşmelidir) → sipariş `Teslimat Hazırlanıyor` olur. Başarısız ödemede sipariş `İptal Edildi` olur ve sepet korunur.
+  - Müşteri dönüş adresine ulaşamazsa (sekme kapandı vb.) yönetici panelindeki siparişte **Ödemeyi Sorgula** düğmesiyle ödemeyi iyzico'dan yeniden sorgulayabilir.
+  - Havale / EFT seçeneğiyle sipariş oluşturulup IBAN ve ödeme bildirim talimatları iletilir.
   - Sunucu tarafında (`/api/checkout`) ürün fiyatları katalogdan doğrulanır, kupon uygulanır ve `SP-XXXX` sipariş numarası üretilir.
 
 - **👑 Kapsamlı Yönetim Paneli (`/admin`):**
@@ -62,6 +63,7 @@ Kullanıcı dostu, kompakt ve minimalist bir tasarıma sahip olan platform; dina
 | `/sepet` | Ürün listesi, adet güncelleme, kupon uygulama ve sipariş özeti. |
 | `/checkout` | Ad, telefon, fatura tipi, ödeme yöntemi seçimi (giriş gerekir, kart bilgisi toplanmaz). |
 | `/siparis-tamamlandi` | Sipariş onay ekranı, sipariş kodu ve teslimat yönergesi. |
+| `/odeme-basarisiz` | Kart ödemesi tamamlanamadığında bilgilendirme ve tekrar deneme. |
 | `/giris`, `/kayit` | Üye girişi ve üyelik oluşturma. |
 | `/sifremi-unuttum`, `/sifre-sifirla` | Şifre sıfırlama isteği ve yeni şifre belirleme. |
 | `/eposta-dogrula` | E-postadaki doğrulama bağlantısının açıldığı sayfa. |
@@ -96,7 +98,9 @@ Veriler **SQLite** (`node:sqlite`, Node ≥ 22.5) ile `data/aymenlisans.db` dosy
 | `POST /api/auth/forgot-password`, `/reset-password` | herkes | Şifre sıfırlama bağlantısı iste / yeni şifre belirle |
 | `PUT /api/auth/profile`, `/password` | üye | Profil ve şifre güncelleme |
 | `GET /api/my/orders` | üye | Üyenin kendi siparişleri ve lisansları |
-| `POST /api/checkout` | doğrulanmış üye | Sipariş oluşturur (fiyat/kupon sunucuda hesaplanır) |
+| `POST /api/checkout` | doğrulanmış üye | Sipariş oluşturur (fiyat/kupon sunucuda hesaplanır); kartta iyzico ödeme adresini döndürür |
+| `POST /odeme/iyzico/callback` | iyzico | Ödeme sonrası dönüş; sonuç iyzico'dan sorgulanır, müşteri yönlendirilir |
+| `POST /api/orders/:no/verify-payment` | admin | Bekleyen kart ödemesini iyzico'dan yeniden sorgular |
 | `GET /api/products` | herkes | Ürün kataloğu |
 | `POST/PUT/DELETE /api/products` | admin | Ürün yönetimi |
 | `GET/PUT/DELETE /api/orders` | admin | Tüm siparişler, durum ve lisans tanımlama |
@@ -155,9 +159,13 @@ DATABASE_PATH="./data/aymenlisans.db"   # SQLite dosyası
 ADMIN_EMAIL="admin@aymenlisans.com"     # Yönetici hesabı e-postası
 ADMIN_PASSWORD=""                       # En az 8 karakter; boşsa ilk açılışta rastgele üretilir
 TRUST_PROXY=""                          # nginx/Cloudflare arkasında "true"
-PAYMENT_PROVIDER_CHECKOUT_URL=""        # İsteğe bağlı iyzico/PayTR yönlendirme adresi
+IYZICO_API_KEY=""                       # iyzico anahtarları; boşsa kartla ödeme kapalı
+IYZICO_SECRET_KEY=""
+IYZICO_BASE_URL="https://sandbox-api.iyzipay.com"   # canlı: https://api.iyzipay.com
 ```
 
+> **iyzico kurulumu:** [iyzico sandbox](https://sandbox-merchant.iyzipay.com) panelinden API anahtarlarını alıp `IYZICO_API_KEY` / `IYZICO_SECRET_KEY` olarak girin. Dönüş adresi her istekle `APP_URL` + `/odeme/iyzico/callback` olarak gönderilir; `APP_URL` internetten erişilebilir (canlıda `https://`) olmalıdır. Canlıya geçerken anahtarları ve `IYZICO_BASE_URL` değerini canlı olanlarla değiştirin. Geliştirme modunda (`npm run dev`) anahtar yoksa kartlı siparişler ödenmiş sayılır; **üretimde anahtar yoksa kartla ödeme kapalıdır**.
+>
 > **Üretim notu:** `npm run build && npm start` ile çalıştırın. Çerezler yalnızca HTTPS isteklerde `Secure` işaretlenir; HTTPS'i bir proxy sonlandırıyorsa `TRUST_PROXY=true` verin. `data/` klasörünü yedekleyin.
 
 ---

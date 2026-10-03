@@ -33,6 +33,7 @@ export interface OrderLineItem {
 }
 
 export const ORDER_STATUSES = [
+  'Ödeme Bekleniyor',
   'Teslim Edildi',
   'Teslimat Hazırlanıyor',
   'Ödeme Bildirimi Bekleniyor',
@@ -59,6 +60,8 @@ export interface OrderResult {
   toplamTutar: number;
   durum: (typeof ORDER_STATUSES)[number];
   teslimEdilenBilgiler?: string;
+  /** Kart ödemesinde ödeme sağlayıcısının işlem numarası. */
+  odemeId?: string;
 }
 
 export interface CheckoutValidationResult {
@@ -66,12 +69,10 @@ export interface CheckoutValidationResult {
   status: number;
   error?: string;
   order?: OrderResult;
-  redirectUrl?: string | null;
 }
 
 export function processCheckoutRequest(
   body: CheckoutRequestBody,
-  envCheckoutUrl?: string,
   catalog?: Product[],
   coupons?: Record<string, number>,
   generateOrderNo?: () => string
@@ -249,17 +250,9 @@ export function processCheckoutRequest(
     teslimEdilenBilgiler: 'Siparişiniz işleniyor. Dijital lisans anahtarınız e-postanıza gönderilecektir.',
   };
 
-  let redirectUrl: string | null = null;
-  const configuredUrl = (envCheckoutUrl ?? '').trim();
-  if (odemeYontemi === 'kredi-karti' && configuredUrl.length > 0) {
-    const separator = configuredUrl.includes('?') ? '&' : '?';
-    redirectUrl = `${configuredUrl}${separator}order=${encodeURIComponent(siparisNo)}&amount=${encodeURIComponent(toplamTutar.toFixed(2))}`;
-  }
-
   return {
     ok: true,
     status: 200,
     order,
-    redirectUrl,
   };
 }

@@ -28,6 +28,7 @@ import {
   setSessionCookie,
 } from './auth';
 import { Mailer, passwordResetEmail, verificationEmail } from './mailer';
+import type { PaymentProvider, PaymentResult } from './payments';
 import * as store from './store';
 import { buildProduct } from './validate';
 
@@ -35,8 +36,10 @@ export interface AppOptions {
   db: Db;
   /** HTTPS isteklerde çerezlere `Secure` bayrağı eklenir (production için true). */
   secureCookies?: boolean;
-  /** Harici ödeme sağlayıcısı yönlendirme adresi (ayar boşsa kullanılır). */
-  paymentProviderUrl?: string;
+  /** Kart ödemesi sağlayıcısı (iyzico). Yoksa kartla ödeme yalnızca `simulatePayments` ile çalışır. */
+  paymentProvider?: PaymentProvider | null;
+  /** Sağlayıcı yokken kart siparişlerini ödenmiş sayar (yalnızca geliştirme/test için). */
+  simulatePayments?: boolean;
   /** E-posta gönderici (doğrulama ve şifre sıfırlama). */
   mailer: Mailer;
   /** E-postalardaki bağlantılar için sitenin kök adresi (Host başlığına güvenilmez). */
@@ -44,8 +47,6 @@ export interface AppOptions {
   /** IP başına saatlik kayıt sınırı (varsayılan 10). */
   registerLimit?: number;
 }
-
-const PUBLIC_SETTING_KEYS = store.SETTING_KEYS.filter((k) => k !== 'paymentProviderUrl');
 
 const cleanText = (v: unknown, max: number) =>
   typeof v === 'string' ? v.trim().slice(0, max) : '';
@@ -55,7 +56,8 @@ export function createApp({
   mailer,
   appUrl = 'http://localhost:3000',
   secureCookies = false,
-  paymentProviderUrl = '',
+  paymentProvider = null,
+  simulatePayments = false,
   registerLimit = 10,
 }: AppOptions) {
   const app = express();
@@ -417,16 +419,9 @@ export function createApp({
 
   // ---------- Ayarlar ----------
 
-  app.get('/api/settings', (req, res) => {
+  app.get('/api/settings', (_req, res) => {
     const all = store.getSettings(db);
-    if (req.user?.rol === 'admin') {
-      res.json(all);
-      return;
-    }
-    res.json({
-      ...Object.fromEntries(PUBLIC_SETTING_KEYS.map((k) => [k, all[k]])),
-      paymentProviderUrl: '',
-    });
+    res.json(all);
   });
 
   app.post('/api/settings', requireAdmin, (req, res) => {
@@ -436,10 +431,6 @@ export function createApp({
       if (value === undefined) continue;
       if (typeof value !== 'string' || value.length > 500) {
         res.status(400).json({ error: `"${key}" ayarı geçersiz.` });
-        return;
-      }
-      if (key === 'paymentProviderUrl' && value.trim() !== '' && !/^https:\/\//i.test(value.trim())) {
-        res.status(400).json({ error: 'Ödeme sağlayıcısı adresi https:// ile başlamalıdır.' });
         return;
       }
       updates[key] = value.trim();
@@ -462,34 +453,168 @@ export function createApp({
     }
   };
 
-  app.post('/api/checkout', requireUser, (req, res) => {
-    if (!req.user!.dogrulandi) {
-      res.status(403).json({
-        error: 'Sipariş vermek için e-posta adresinizi doğrulamalısınız.',
-        kod: 'EPOSTA_DOGRULANMADI',
-      });
-      return;
-    }
-    const result = processCheckoutRequest(
-      req.body,
-      store.getSettings(db).paymentProviderUrl || paymentProviderUrl,
-      store.listProducts(db),
-      store.listCoupons(db),
-      generateOrderNo
-    );
+  const PAID_STATUSES: OrderResult['durum'][] = ['Teslimat Hazırlanıyor', 'Teslim Edildi'];
+  const outcomeOf = (o: OrderResult) => (PAID_STATUSES.includes(o.durum) ? 'paid' : 'failed');
 
-    if (!result.ok || !result.order) {
-      res.status(result.status).json({ error: result.error });
-      return;
+  /**
+   * Bekleyen bir kart siparişinin ödeme sonucunu sağlayıcıdan sorgular ve siparişe işler.
+   * Tutar ve sipariş numarası eşleşmeden sipariş ödenmiş sayılmaz. Tekrar çağrıldığında etkisizdir.
+   */
+  async function settlePayment(
+    siparisNo: string,
+    token: string,
+    cancelOnFailure: boolean
+  ): Promise<'paid' | 'failed' | 'pending' | 'error'> {
+    const initial = store.getOrder(db, siparisNo);
+    if (!initial) return 'error';
+    if (initial.durum !== 'Ödeme Bekleniyor') return outcomeOf(initial);
+    if (!paymentProvider) return 'error';
+
+    let result: PaymentResult;
+    try {
+      result = await paymentProvider.retrieve(token);
+    } catch (err) {
+      console.error(`Ödeme sorgulanamadı (${siparisNo}):`, (err as Error).message);
+      return 'error';
     }
 
-    store.insertOrder(db, result.order as OrderResult, req.user!.id);
-    res.status(200).json({
-      ok: true,
-      siparisNo: result.order.siparisNo,
-      order: result.order,
-      redirectUrl: result.redirectUrl,
-    });
+    // Beklerken sipariş başka bir istekle (ör. ikinci callback) güncellenmiş olabilir.
+    const order = store.getOrder(db, siparisNo);
+    if (!order) return 'error';
+    if (order.durum !== 'Ödeme Bekleniyor') return outcomeOf(order);
+
+    if (result.paid) {
+      if (result.siparisNo !== order.siparisNo || Math.abs(result.paidPrice - order.toplamTutar) > 0.01) {
+        console.error(
+          `Ödeme bilgisi uyuşmuyor (${siparisNo}): sağlayıcı=${result.siparisNo}/${result.paidPrice}, sipariş=${order.toplamTutar}`
+        );
+        return 'error';
+      }
+      order.durum = 'Teslimat Hazırlanıyor';
+      order.odemeId = result.paymentId;
+      order.teslimEdilenBilgiler =
+        'Ödemeniz alındı. Lisans bilgileriniz hazırlandığında burada görüntülenecektir.';
+      store.saveOrder(db, order);
+      return 'paid';
+    }
+
+    if (!cancelOnFailure) return 'pending';
+    order.durum = 'İptal Edildi';
+    order.teslimEdilenBilgiler = `Ödeme tamamlanamadı${result.error ? `: ${result.error}` : '.'}`;
+    store.saveOrder(db, order);
+    return 'failed';
+  }
+
+  app.post('/api/checkout', requireUser, async (req, res, next) => {
+    try {
+      if (!req.user!.dogrulandi) {
+        res.status(403).json({
+          error: 'Sipariş vermek için e-posta adresinizi doğrulamalısınız.',
+          kod: 'EPOSTA_DOGRULANMADI',
+        });
+        return;
+      }
+      const result = processCheckoutRequest(
+        req.body,
+        store.listProducts(db),
+        store.listCoupons(db),
+        generateOrderNo
+      );
+
+      if (!result.ok || !result.order) {
+        res.status(result.status).json({ error: result.error });
+        return;
+      }
+      const order = result.order as OrderResult;
+      const isCard = order.odemeYontemi === 'kredi-karti';
+
+      if (isCard && !paymentProvider && !simulatePayments) {
+        res.status(503).json({ error: 'Kartla ödeme şu anda kullanılamıyor. Lütfen Havale/EFT yöntemini seçiniz.' });
+        return;
+      }
+
+      if (isCard && paymentProvider) {
+        order.durum = 'Ödeme Bekleniyor';
+        order.teslimEdilenBilgiler = 'Ödemeniz bekleniyor. Ödeme tamamlandığında siparişiniz işleme alınır.';
+      }
+      store.insertOrder(db, order, req.user!.id);
+
+      let redirectUrl: string | null = null;
+      if (isCard && paymentProvider) {
+        try {
+          const session = await paymentProvider.initialize({
+            siparisNo: order.siparisNo,
+            araToplam: order.araToplam,
+            odenecekTutar: order.toplamTutar,
+            items: order.urunler.map((u) => ({
+              id: u.slug,
+              name: u.adet > 1 ? `${u.ad} x${u.adet}` : u.ad,
+              category: u.kategoriAdi,
+              price: u.satirToplami,
+            })),
+            buyer: {
+              id: req.user!.id,
+              ad: order.musteri.ad,
+              eposta: order.musteri.eposta,
+              telefon: order.musteri.telefon,
+              ip: req.ip ?? '127.0.0.1',
+            },
+            callbackUrl: `${baseUrl}/odeme/iyzico/callback`,
+          });
+          store.setOrderPaymentToken(db, order.siparisNo, session.token);
+          redirectUrl = session.url;
+        } catch (err) {
+          // Ödeme oturumu açılamadıysa tahsilat olmamıştır; siparişi geri al.
+          console.error(`Ödeme oturumu açılamadı (${order.siparisNo}):`, (err as Error).message);
+          store.removeOrder(db, order.siparisNo);
+          res.status(502).json({ error: 'Ödeme sayfası şu anda açılamadı. Lütfen tekrar deneyiniz.' });
+          return;
+        }
+      }
+
+      res.status(200).json({ ok: true, siparisNo: order.siparisNo, order, redirectUrl });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * Ödeme sağlayıcısı müşteriyi ödeme sonrası buraya POST ile döndürür (çapraz site olduğu için /api dışındadır;
+   * çerez veya Origin'e güvenilmez, sonuç her zaman sağlayıcıdan token ile sorgulanır).
+   */
+  app.post('/odeme/iyzico/callback', express.urlencoded({ extended: false, limit: '20kb' }), async (req, res, next) => {
+    try {
+      const token = typeof req.body?.token === 'string' ? req.body.token.slice(0, 200) : '';
+      const order = token ? store.getOrderByPaymentToken(db, token) : null;
+      if (!order) {
+        res.redirect(303, `${baseUrl}/odeme-basarisiz`);
+        return;
+      }
+      const outcome = await settlePayment(order.siparisNo, token, true);
+      const no = encodeURIComponent(order.siparisNo);
+      if (outcome === 'paid') {
+        res.redirect(303, `${baseUrl}/siparis-tamamlandi?siparisNo=${no}`);
+      } else {
+        res.redirect(303, `${baseUrl}/odeme-basarisiz?siparisNo=${no}${outcome === 'error' ? '&belirsiz=1' : ''}`);
+      }
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** Müşteri callback'e dönemediyse (sekme kapandı vb.) yönetici ödemeyi sağlayıcıdan yeniden sorgulayabilir. */
+  app.post('/api/orders/:siparisNo/verify-payment', requireAdmin, async (req, res, next) => {
+    try {
+      const token = store.getOrderPaymentToken(db, req.params.siparisNo);
+      if (!token) {
+        res.status(400).json({ error: 'Bu sipariş için sorgulanacak bir kart ödemesi yok.' });
+        return;
+      }
+      const sonuc = await settlePayment(req.params.siparisNo, token, false);
+      res.json({ ok: true, sonuc, order: store.getOrder(db, req.params.siparisNo) });
+    } catch (err) {
+      next(err);
+    }
   });
 
   // Bilinmeyen API yolları SPA'ya düşmesin.

@@ -1,17 +1,30 @@
 import React, { useEffect } from 'react';
 import { CheckCircle2, ArrowRight, PackageCheck, Mail } from 'lucide-react';
 import { useCart } from '../context/CartContext';
+import { useAuth } from '../context/AuthContext';
 import { useRouter, Link } from '../context/RouterContext';
 import { formatPriceTL } from '../../lib/products';
 
 export const OrderCompletedPage: React.FC = () => {
-  const { lastOrder } = useCart();
+  const { lastOrder: storedOrder, clearCart } = useCart();
+  const { myOrders } = useAuth();
   const { searchParams } = useRouter();
   const siparisNoParam = searchParams.get('siparisNo');
+  // Kart ödemesinde sipariş durumu ödeme sonrası değişir; güncel kaydı sunucudan al.
+  const lastOrder =
+    myOrders.find((o) => o.siparisNo === siparisNoParam) ??
+    (storedOrder && (!siparisNoParam || storedOrder.siparisNo === siparisNoParam) ? storedOrder : null);
+  const isConfirmed =
+    lastOrder !== null && lastOrder.durum !== 'Ödeme Bekleniyor' && lastOrder.durum !== 'İptal Edildi';
 
   useEffect(() => {
     document.title = 'Siparişiniz Alındı | AYMENLisans';
   }, []);
+
+  // Kartla ödeme başarıyla döndüyse sepeti şimdi temizle
+  useEffect(() => {
+    if (isConfirmed && lastOrder?.odemeYontemi === 'kredi-karti') clearCart();
+  }, [isConfirmed, lastOrder?.odemeYontemi, clearCart]);
 
   const orderNo = lastOrder?.siparisNo || siparisNoParam || 'SP-1042';
 

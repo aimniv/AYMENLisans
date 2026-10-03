@@ -128,12 +128,13 @@ export const CheckoutPage: React.FC = () => {
       if (data.order) {
         recordOrder(data.order);
       }
-      clearCart();
 
       if (data.redirectUrl) {
+        // Sepet, ödeme başarıyla tamamlanınca temizlenir (sipariş tamamlandı sayfası).
         window.location.href = data.redirectUrl;
         return;
       }
+      clearCart();
 
       navigate(`/siparis-tamamlandi?siparisNo=${encodeURIComponent(data.siparisNo)}`);
     } catch {

@@ -16,6 +16,7 @@ import { AccountPage } from './pages/AccountPage';
 import { CorporatePage } from './pages/CorporatePage';
 import { AdminPage } from './pages/AdminPage';
 import { LoginPage } from './pages/LoginPage';
+import { PaymentFailedPage } from './pages/PaymentFailedPage';
 import { ForgotPasswordPage, ResetPasswordPage, VerifyEmailPage } from './pages/EmailPages';
 
 const AppRoutes: React.FC = () => {
@@ -67,6 +68,10 @@ const AppRoutes: React.FC = () => {
 
   if (cleanPath === '/checkout' || cleanPath === '/odeme') {
     return <CheckoutPage />;
+  }
+
+  if (cleanPath === '/odeme-basarisiz') {
+    return <PaymentFailedPage />;
   }
 
   if (cleanPath === '/siparis-tamamlandi') {

@@ -50,6 +50,25 @@ export function insertOrder(db: Db, order: OrderResult, userId: number | null) {
   );
 }
 
+export function setOrderPaymentToken(db: Db, siparisNo: string, token: string) {
+  db.prepare('UPDATE orders SET odeme_token = ? WHERE siparis_no = ?').run(token, siparisNo);
+}
+
+export function getOrderByPaymentToken(db: Db, token: string): OrderResult | null {
+  const row = db.prepare('SELECT data FROM orders WHERE odeme_token = ?').get(token) as
+    | { data: string }
+    | undefined;
+  return row ? (JSON.parse(row.data) as OrderResult) : null;
+}
+
+/** Siparişin bekleyen ödeme token'ını döndürür (yoksa null). */
+export function getOrderPaymentToken(db: Db, siparisNo: string): string | null {
+  const row = db.prepare('SELECT odeme_token FROM orders WHERE siparis_no = ?').get(siparisNo) as
+    | { odeme_token: string | null }
+    | undefined;
+  return row?.odeme_token ?? null;
+}
+
 export function listOrders(db: Db, userId?: number): OrderResult[] {
   const rows = (
     userId === undefined
@@ -104,7 +123,8 @@ export function getSettings(db: Db): Settings {
     anahtar: string;
     deger: string;
   }[];
-  return { ...DEFAULT_SETTINGS, ...Object.fromEntries(rows.map((r) => [r.anahtar, r.deger])) };
+  const known = rows.filter((r) => r.anahtar in DEFAULT_SETTINGS);
+  return { ...DEFAULT_SETTINGS, ...Object.fromEntries(known.map((r) => [r.anahtar, r.deger])) };
 }
 
 export function saveSettings(db: Db, updates: Partial<Settings>) {

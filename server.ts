@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { createApp } from './server/app';
 import { createMailer } from './server/mailer';
+import { createIyzicoProvider } from './server/payments';
 import { ensureAdmin, normalizeEmail } from './server/auth';
 import { openDb } from './server/db';
 
@@ -34,12 +35,22 @@ async function startServer() {
     console.warn('APP_URL tanımlı değil: e-postalardaki bağlantılar localhost adresini gösterecek.');
   }
 
+  const paymentProvider = createIyzicoProvider();
+  if (!paymentProvider) {
+    console.warn(
+      isProd
+        ? 'IYZICO_API_KEY / IYZICO_SECRET_KEY tanımlı değil: kartla ödeme kapalı, yalnızca Havale/EFT çalışır.'
+        : 'iyzico anahtarları tanımlı değil: kartlı siparişler ödenmiş sayılır (yalnızca geliştirme modu).'
+    );
+  }
+
   const app = createApp({
     db,
     mailer: createMailer(),
     appUrl,
     secureCookies: isProd,
-    paymentProviderUrl: process.env.PAYMENT_PROVIDER_CHECKOUT_URL,
+    paymentProvider,
+    simulatePayments: !isProd && !paymentProvider,
   });
 
   if (!isProd) {

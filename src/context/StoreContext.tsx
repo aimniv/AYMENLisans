@@ -10,7 +10,6 @@ export interface SiteSettings {
   whatsappNumber: string;
   workHours: string;
   bankIban: string;
-  paymentProviderUrl: string;
 }
 
 interface StoreContextValue {
@@ -26,6 +25,10 @@ interface StoreContextValue {
   deleteProduct: (slug: string) => Promise<{ ok: boolean; error?: string }>;
   updateOrder: (siparisNo: string, updates: Partial<OrderResult>) => Promise<{ ok: boolean; error?: string }>;
   deleteOrder: (siparisNo: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Kart ödemesini ödeme sağlayıcısından yeniden sorgular. */
+  verifyOrderPayment: (
+    siparisNo: string
+  ) => Promise<{ ok: boolean; sonuc?: 'paid' | 'failed' | 'pending' | 'error'; error?: string }>;
   addCoupon: (code: string, rate: number) => Promise<{ ok: boolean; error?: string }>;
   deleteCoupon: (code: string) => Promise<{ ok: boolean; error?: string }>;
   updateSettings: (newSettings: Partial<SiteSettings>) => Promise<{ ok: boolean; error?: string }>;
@@ -38,7 +41,6 @@ const DEFAULT_SETTINGS: SiteSettings = {
   whatsappNumber: '+90 536 565 70 03',
   workHours: 'Hafta içi 09:00 - 18:00',
   bankIban: 'TR33 0006 1005 1978 6451 0001 24 (Ziraat Bankası - AYMEN Dijital)',
-  paymentProviderUrl: '',
 };
 
 const StoreContext = createContext<StoreContextValue | null>(null);
@@ -210,6 +212,24 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, []);
 
+  const verifyOrderPayment = useCallback(async (siparisNo: string) => {
+    try {
+      const res = await fetch(`/api/orders/${encodeURIComponent(siparisNo)}/verify-payment`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, error: data.error || 'Ödeme sorgulanamadı.' };
+      }
+      if (data.order) {
+        setOrders((prev) => prev.map((o) => (o.siparisNo === siparisNo ? data.order : o)));
+      }
+      return { ok: true, sonuc: data.sonuc };
+    } catch {
+      return { ok: false, error: 'Sunucuya bağlanılamadı.' };
+    }
+  }, []);
+
   const addCoupon = useCallback(async (code: string, rate: number) => {
     try {
       const res = await fetch('/api/coupons', {
@@ -277,6 +297,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         deleteProduct,
         updateOrder,
         deleteOrder,
+        verifyOrderPayment,
         addCoupon,
         deleteCoupon,
         updateSettings,
